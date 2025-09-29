@@ -147,6 +147,7 @@ func (i repoItem) Title() string {
 }
 
 func (i repoItem) Description() string {
+	// First line: stars, language, and score
 	stars := ""
 	if i.repo.Repository.StargazersCount != nil {
 		stars = fmt.Sprintf("⭐ %d", *i.repo.Repository.StargazersCount)
@@ -159,12 +160,17 @@ func (i repoItem) Description() string {
 
 	score := fmt.Sprintf("[Score: %d]", i.repo.RelevanceScore)
 
+	// Second line: repository description
 	desc := ""
-	if i.repo.Repository.Description != nil {
+	if i.repo.Repository.Description != nil && *i.repo.Repository.Description != "" {
 		desc = *i.repo.Repository.Description
-		if len(desc) > 60 {
-			desc = desc[:60] + "..."
+		// Truncate description if too long, but be more generous with space
+		if len(desc) > 100 {
+			desc = desc[:97] + "..."
 		}
+		desc = "📝 " + desc
+	} else {
+		desc = "📝 No description available"
 	}
 
 	return fmt.Sprintf("%s %s %s\n%s", stars, lang, score, desc)
@@ -217,15 +223,23 @@ func (i issueItem) Description() string {
 
 // Initialize the model
 func NewModel(cfg *config.Config) Model {
-	// Create repository list
-	repoList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	// Create repository list with custom delegate for better description display
+	delegate := list.NewDefaultDelegate()
+	delegate.SetHeight(3) // Allow more space for descriptions
+	delegate.SetSpacing(1)
+
+	repoList := list.New([]list.Item{}, delegate, 0, 0)
 	repoList.Title = "Hacktoberfest Repositories"
 	repoList.SetShowStatusBar(true)
 	repoList.SetFilteringEnabled(true)
 	repoList.SetShowHelp(true)
 
 	// Create issue list
-	issueList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	issueDelegate := list.NewDefaultDelegate()
+	issueDelegate.SetHeight(2)
+	issueDelegate.SetSpacing(1)
+
+	issueList := list.New([]list.Item{}, issueDelegate, 0, 0)
 	issueList.Title = "Repository Issues"
 	issueList.SetShowStatusBar(true)
 	issueList.SetFilteringEnabled(true)
