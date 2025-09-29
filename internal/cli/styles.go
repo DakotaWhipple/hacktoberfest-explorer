@@ -2,19 +2,20 @@ package cli
 
 import (
 	"fmt"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
 // Theme colors
 var (
-	Primary   = lipgloss.Color("#FF6B35") // Halloween orange
-	Secondary = lipgloss.Color("#F7931E") // Pumpkin orange  
-	Accent    = lipgloss.Color("#FFD23F") // Yellow
-	Success   = lipgloss.Color("#06D6A0") // Green
-	Warning   = lipgloss.Color("#F72585") // Pink/Red
-	Info      = lipgloss.Color("#4361EE") // Blue
-	Muted     = lipgloss.Color("#6C757D") // Gray
-	Text      = lipgloss.Color("#FFFFFF") // White
+	Primary    = lipgloss.Color("#FF6B35") // Halloween orange
+	Secondary  = lipgloss.Color("#F7931E") // Pumpkin orange
+	Accent     = lipgloss.Color("#FFD23F") // Yellow
+	Success    = lipgloss.Color("#06D6A0") // Green
+	Warning    = lipgloss.Color("#F72585") // Pink/Red
+	Info       = lipgloss.Color("#4361EE") // Blue
+	Muted      = lipgloss.Color("#6C757D") // Gray
+	Text       = lipgloss.Color("#FFFFFF") // White
 	Background = lipgloss.Color("#000000") // Black
 )
 

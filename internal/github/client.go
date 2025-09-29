@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"hacktober/internal/logger"
+
 	"github.com/google/go-github/v56/github"
 	"golang.org/x/oauth2"
 )
@@ -47,6 +49,8 @@ func NewClient(token string) *Client {
 
 // SearchHacktoberfestRepos searches for Hacktoberfest repositories with minimum stars
 func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxResults int) ([]*Repository, error) {
+	start := time.Now()
+
 	query := fmt.Sprintf("topic:hacktoberfest stars:>=%d sort:stars-desc", minStars)
 
 	// Add language filter if specified
@@ -58,6 +62,8 @@ func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxR
 		query += " (" + strings.Join(langQuery, " OR ") + ")"
 	}
 
+	logger.Info(fmt.Sprintf("Starting repository search: %s", query))
+
 	opts := &github.SearchOptions{
 		Sort:  "stars",
 		Order: "desc",
@@ -66,27 +72,56 @@ func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxR
 		},
 	}
 
-	result, _, err := c.client.Search.Repositories(c.ctx, query, opts)
+	result, response, err := c.client.Search.Repositories(c.ctx, query, opts)
+	duration := time.Since(start)
+
+	if response != nil {
+		logger.LogAPIRequest("repositories/search", query, response.StatusCode, duration)
+		logger.Debug(fmt.Sprintf("Rate limit remaining: %d, resets at: %v",
+			response.Rate.Remaining, response.Rate.Reset.Time))
+	}
+
 	if err != nil {
+		logger.ErrorWithErr("Failed to search repositories", err)
 		return nil, fmt.Errorf("failed to search repositories: %w", err)
 	}
 
+	totalFound := 0
+	if result.Total != nil {
+		totalFound = *result.Total
+	}
+
+	logger.Info(fmt.Sprintf("Repository search API completed: %d total found, %d returned, took %v",
+		totalFound, len(result.Repositories), duration))
+
 	repos := make([]*Repository, 0, len(result.Repositories))
 	for _, repo := range result.Repositories {
-		if *repo.StargazersCount >= minStars {
+		if repo.StargazersCount != nil && *repo.StargazersCount >= minStars {
 			r := &Repository{
 				Repository: repo,
 			}
 			r.calculateRelevance(languages)
 			repos = append(repos, r)
+
+			// Log each repository found
+			logger.Debug(fmt.Sprintf("Repository processed: %s/%s, stars: %d, relevance: %d",
+				*repo.Owner.Login, *repo.Name, *repo.StargazersCount, r.RelevanceScore))
 		}
 	}
+
+	logger.LogRepoSearch(query, totalFound, len(repos), languages)
+	logger.Info(fmt.Sprintf("Repository search completed: %d filtered results", len(repos)))
 
 	return repos, nil
 }
 
 // GetRepositoryIssues fetches issues for a specific repository
 func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxResults int) ([]*Issue, error) {
+	start := time.Now()
+	repoName := fmt.Sprintf("%s/%s", owner, repo)
+
+	logger.Info(fmt.Sprintf("Starting issue search for %s", repoName))
+
 	opts := &github.IssueListByRepoOptions{
 		State:  "open",
 		Labels: append(labels, "good first issue", "help wanted"),
@@ -96,15 +131,28 @@ func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxRes
 		},
 	}
 
-	issues, _, err := c.client.Issues.ListByRepo(c.ctx, owner, repo, opts)
+	issues, response, err := c.client.Issues.ListByRepo(c.ctx, owner, repo, opts)
+	duration := time.Since(start)
+
+	if response != nil {
+		logger.LogAPIRequest("issues/list", repoName, response.StatusCode, duration)
+		logger.Debug(fmt.Sprintf("Rate limit remaining: %d, resets at: %v",
+			response.Rate.Remaining, response.Rate.Reset.Time))
+	}
+
 	if err != nil {
+		logger.ErrorWithErr("Failed to fetch repository issues", err)
 		return nil, fmt.Errorf("failed to fetch issues: %w", err)
 	}
+
+	logger.Info(fmt.Sprintf("Issue search API completed for %s: %d issues returned, took %v",
+		repoName, len(issues), duration))
 
 	result := make([]*Issue, 0, len(issues))
 	for _, issue := range issues {
 		// Skip pull requests
 		if issue.PullRequestLinks != nil {
+			logger.Debug(fmt.Sprintf("Skipping pull request #%d: %s", *issue.Number, *issue.Title))
 			continue
 		}
 
@@ -113,7 +161,14 @@ func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxRes
 		}
 		i.calculateDifficulty()
 		result = append(result, i)
+
+		// Log each issue found
+		logger.Debug(fmt.Sprintf("Issue processed #%d: %s, difficulty: %d",
+			*issue.Number, *issue.Title, i.DifficultyScore))
 	}
+
+	logger.LogIssueSearch(repoName, len(issues), len(result))
+	logger.Info(fmt.Sprintf("Issue search completed for %s: %d filtered results", repoName, len(result)))
 
 	return result, nil
 }
