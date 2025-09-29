@@ -1,0 +1,7 @@
+{
+  "github_token": "YOUR_GITHUB_TOKEN_HERE",
+  "preferred_languages": ["Go", "JavaScript", "Python", "TypeScript", "Rust"],
+  "skill_level": "intermediate",
+  "max_repos": 30,
+  "max_issues_per_repo": 15
+}
