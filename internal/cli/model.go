@@ -225,8 +225,8 @@ func (i issueItem) Description() string {
 func NewModel(cfg *config.Config) Model {
 	// Create repository list with custom delegate for better description display
 	delegate := list.NewDefaultDelegate()
-	delegate.SetHeight(3) // Allow more space for descriptions
-	delegate.SetSpacing(1)
+	delegate.SetHeight(4)  // Allow more space for descriptions (title + description lines)
+	delegate.SetSpacing(0) // No extra spacing, let content determine spacing
 
 	repoList := list.New([]list.Item{}, delegate, 0, 0)
 	repoList.Title = "Hacktoberfest Repositories"
@@ -236,8 +236,8 @@ func NewModel(cfg *config.Config) Model {
 
 	// Create issue list
 	issueDelegate := list.NewDefaultDelegate()
-	issueDelegate.SetHeight(2)
-	issueDelegate.SetSpacing(1)
+	issueDelegate.SetHeight(3) // Allow for issue title + details
+	issueDelegate.SetSpacing(0)
 
 	issueList := list.New([]list.Item{}, issueDelegate, 0, 0)
 	issueList.Title = "Repository Issues"

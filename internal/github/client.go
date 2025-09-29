@@ -172,12 +172,17 @@ func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxRes
 	logger.Info(fmt.Sprintf("Starting issue search for %s", repoName))
 
 	opts := &github.IssueListByRepoOptions{
-		State: "open",
-		Sort:  "updated",
+		State:     "open",
+		Sort:      "updated",
+		Direction: "desc",
 		ListOptions: github.ListOptions{
+			Page:    1,
 			PerPage: min(maxResults, 100),
 		},
 	}
+
+	logger.Debug(fmt.Sprintf("Making API call to list issues for %s with options: state=open, sort=updated, page=1, perPage=%d",
+		repoName, opts.ListOptions.PerPage))
 
 	issues, response, err := c.client.Issues.ListByRepo(c.ctx, owner, repo, opts)
 	duration := time.Since(start)
@@ -186,6 +191,8 @@ func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxRes
 		logger.LogAPIRequest("issues/list", repoName, response.StatusCode, duration)
 		logger.Debug(fmt.Sprintf("Rate limit remaining: %d, resets at: %v",
 			response.Rate.Remaining, response.Rate.Reset.Time))
+		logger.Debug(fmt.Sprintf("Response headers - Link: %s, Last-Modified: %s",
+			response.Header.Get("Link"), response.Header.Get("Last-Modified")))
 	}
 
 	if err != nil {
