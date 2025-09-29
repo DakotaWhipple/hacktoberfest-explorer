@@ -1,0 +1,131 @@
+version: '3'
+
+vars:
+  APP_NAME: hacktober
+  BUILD_DIR: build
+  MAIN_PATH: ./cmd/hacktober
+  
+tasks:
+  default:
+    desc: Build the application
+    cmds:
+      - task: build
+
+  build:
+    desc: Build the hacktoberfest CLI application
+    cmds:
+      - echo "🔨 Building {{.APP_NAME}}..."
+      - go build -o {{.APP_NAME}} {{.MAIN_PATH}}
+      - echo "✅ Build complete: ./{{.APP_NAME}}"
+
+  build:verbose:
+    desc: Build with verbose output
+    cmds:
+      - echo "🔨 Building {{.APP_NAME}} with verbose output..."
+      - go build -v -o {{.APP_NAME}} {{.MAIN_PATH}}
+
+  deps:
+    desc: Install and tidy dependencies
+    cmds:
+      - echo "📦 Installing dependencies..."
+      - go mod download
+      - go mod tidy
+      - echo "✅ Dependencies updated"
+
+  deps:charm:
+    desc: Add Charm libraries for beautiful CLI
+    cmds:
+      - echo "✨ Adding Charm libraries..."
+      - go get github.com/charmbracelet/bubbletea@latest
+      - go get github.com/charmbracelet/lipgloss@latest  
+      - go get github.com/charmbracelet/bubbles@latest
+      - go mod tidy
+      - echo "✅ Charm libraries added"
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - echo "🧹 Cleaning..."
+      - rm -f {{.APP_NAME}}
+      - rm -rf {{.BUILD_DIR}}
+      - echo "✅ Clean complete"
+
+  config:
+    desc: Create example configuration file
+    cmds:
+      - echo "⚙️  Creating example configuration..."
+      - cp .hacktober-config.example.json ~/.hacktober-config.json
+      - echo "✅ Created ~/.hacktober-config.json"
+      - echo "📝 Please edit it with your GitHub token"
+
+  demo:
+    desc: Show demo information
+    cmds:
+      - ./demo.sh
+
+  test:
+    desc: Run tests
+    cmds:
+      - echo "🧪 Running tests..."
+      - go test -v ./...
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - echo "📐 Formatting code..."
+      - go fmt ./...
+      - echo "✅ Code formatted"
+
+  lint:
+    desc: Run linter (requires golangci-lint)
+    cmds:
+      - echo "🔍 Running linter..."
+      - golangci-lint run
+    preconditions:
+      - sh: which golangci-lint
+        msg: "golangci-lint is not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+
+  run:
+    desc: Build and run the application (requires GITHUB_TOKEN)
+    deps: [build]
+    cmds:
+      - ./{{.APP_NAME}}
+    preconditions:
+      - sh: test -n "$GITHUB_TOKEN"
+        msg: "GITHUB_TOKEN environment variable is required"
+
+  run:demo:
+    desc: Run with demo token (will fail but show interface)
+    deps: [build]
+    cmds:
+      - GITHUB_TOKEN=demo_token ./{{.APP_NAME}}
+
+  install:
+    desc: Install the binary to $GOPATH/bin
+    deps: [build]
+    cmds:
+      - echo "📦 Installing {{.APP_NAME}} to $GOPATH/bin..."
+      - cp {{.APP_NAME}} $GOPATH/bin/
+      - echo "✅ Installed {{.APP_NAME}}"
+
+  dev:setup:
+    desc: Complete development setup
+    cmds:
+      - task: deps
+      - task: deps:charm
+      - task: config
+      - echo "🎉 Development environment ready!"
+      - echo "💡 Set your GITHUB_TOKEN and run: task run"
+
+  help:
+    desc: Show available tasks
+    cmds:
+      - echo "🎃 Hacktoberfest Repository & Issue Explorer"
+      - echo ""
+      - echo "Available tasks:"
+      - task --list-all
+      - echo ""
+      - echo "Quick start:"
+      - echo "  task dev:setup    # Set up everything"  
+      - echo "  export GITHUB_TOKEN=your_token"
+      - echo "  task run          # Build and run"

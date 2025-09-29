@@ -13,13 +13,6 @@ A powerful CLI tool to discover relevant Hacktoberfest repositories and issues t
 
 ## Installation
 
-1. **Clone or set up the project:**
-   ```bash
-   # If you haven't already
-   git clone <your-repo>
-   cd hacktober
-   ```
-
 2. **Build the application:**
    ```bash
    go build -o hacktober ./cmd/hacktober
