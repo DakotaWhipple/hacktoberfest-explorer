@@ -50,69 +50,111 @@ func NewClient(token string) *Client {
 // SearchHacktoberfestRepos searches for Hacktoberfest repositories with minimum stars
 func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxResults int) ([]*Repository, error) {
 	start := time.Now()
+	logger.Info(fmt.Sprintf("Starting repository search with languages: %v", languages))
 
-	query := fmt.Sprintf("topic:hacktoberfest stars:>=%d sort:stars-desc", minStars)
+	var allRepos []*Repository
+	repoMap := make(map[string]*Repository) // To deduplicate repos
 
-	// Add language filter if specified
-	if len(languages) > 0 {
-		langQuery := make([]string, len(languages))
-		for i, lang := range languages {
-			langQuery[i] = fmt.Sprintf("language:%s", strings.ToLower(lang))
+	// If no languages specified, search without language filter
+	if len(languages) == 0 {
+		languages = []string{""}
+	}
+
+	for _, lang := range languages {
+		query := fmt.Sprintf("topic:hacktoberfest stars:>=%d sort:stars-desc", minStars)
+
+		// Add language filter if specified
+		if lang != "" {
+			query += fmt.Sprintf(" language:%s", strings.ToLower(lang))
+			logger.Debug(fmt.Sprintf("Searching for language: %s", lang))
+		} else {
+			logger.Debug("Searching without language filter")
 		}
-		query += " (" + strings.Join(langQuery, " OR ") + ")"
-	}
 
-	logger.Info(fmt.Sprintf("Starting repository search: %s", query))
+		logger.Info(fmt.Sprintf("Repository search query: %s", query))
 
-	opts := &github.SearchOptions{
-		Sort:  "stars",
-		Order: "desc",
-		ListOptions: github.ListOptions{
-			PerPage: min(maxResults, 100), // GitHub API limit
-		},
-	}
+		opts := &github.SearchOptions{
+			Sort:  "stars",
+			Order: "desc",
+			ListOptions: github.ListOptions{
+				PerPage: min(100, maxResults), // GitHub API limit
+			},
+		}
 
-	result, response, err := c.client.Search.Repositories(c.ctx, query, opts)
-	duration := time.Since(start)
+		result, response, err := c.client.Search.Repositories(c.ctx, query, opts)
 
-	if response != nil {
-		logger.LogAPIRequest("repositories/search", query, response.StatusCode, duration)
-		logger.Debug(fmt.Sprintf("Rate limit remaining: %d, resets at: %v",
-			response.Rate.Remaining, response.Rate.Reset.Time))
-	}
+		if response != nil {
+			logger.LogAPIRequest("repositories/search", query, response.StatusCode, time.Since(start))
+			logger.Debug(fmt.Sprintf("Rate limit remaining: %d, resets at: %v",
+				response.Rate.Remaining, response.Rate.Reset.Time))
+		}
 
-	if err != nil {
-		logger.ErrorWithErr("Failed to search repositories", err)
-		return nil, fmt.Errorf("failed to search repositories: %w", err)
-	}
+		if err != nil {
+			logger.ErrorWithErr(fmt.Sprintf("Failed to search repositories for language: %s", lang), err)
+			continue // Continue with other languages instead of failing completely
+		}
 
-	totalFound := 0
-	if result.Total != nil {
-		totalFound = *result.Total
-	}
+		totalFound := 0
+		if result.Total != nil {
+			totalFound = *result.Total
+		}
 
-	logger.Info(fmt.Sprintf("Repository search API completed: %d total found, %d returned, took %v",
-		totalFound, len(result.Repositories), duration))
+		logger.Info(fmt.Sprintf("Language %s search completed: %d total found, %d returned",
+			lang, totalFound, len(result.Repositories)))
 
-	repos := make([]*Repository, 0, len(result.Repositories))
-	for _, repo := range result.Repositories {
-		if repo.StargazersCount != nil && *repo.StargazersCount >= minStars {
-			r := &Repository{
-				Repository: repo,
+		// Process repositories for this language
+		for _, repo := range result.Repositories {
+			if repo.StargazersCount != nil && *repo.StargazersCount >= minStars {
+				repoKey := fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name)
+
+				// Skip if we already have this repo (from another language search)
+				if _, exists := repoMap[repoKey]; exists {
+					logger.Debug(fmt.Sprintf("Repository %s already found, skipping duplicate", repoKey))
+					continue
+				}
+
+				r := &Repository{
+					Repository: repo,
+				}
+				r.calculateRelevance(languages)
+				repoMap[repoKey] = r
+
+				logger.Debug(fmt.Sprintf("Repository processed: %s, stars: %d, relevance: %d",
+					repoKey, *repo.StargazersCount, r.RelevanceScore))
 			}
-			r.calculateRelevance(languages)
-			repos = append(repos, r)
+		}
 
-			// Log each repository found
-			logger.Debug(fmt.Sprintf("Repository processed: %s/%s, stars: %d, relevance: %d",
-				*repo.Owner.Login, *repo.Name, *repo.StargazersCount, r.RelevanceScore))
+		// Stop if we've reached our target
+		if len(repoMap) >= maxResults {
+			logger.Info(fmt.Sprintf("Reached maximum results (%d), stopping search", maxResults))
+			break
 		}
 	}
 
-	logger.LogRepoSearch(query, totalFound, len(repos), languages)
-	logger.Info(fmt.Sprintf("Repository search completed: %d filtered results", len(repos)))
+	// Convert map to slice
+	for _, repo := range repoMap {
+		allRepos = append(allRepos, repo)
+	}
 
-	return repos, nil
+	// Sort by relevance score (highest first)
+	for i := 0; i < len(allRepos); i++ {
+		for j := i + 1; j < len(allRepos); j++ {
+			if allRepos[i].RelevanceScore < allRepos[j].RelevanceScore {
+				allRepos[i], allRepos[j] = allRepos[j], allRepos[i]
+			}
+		}
+	}
+
+	// Limit to maxResults
+	if len(allRepos) > maxResults {
+		allRepos = allRepos[:maxResults]
+	}
+
+	duration := time.Since(start)
+	logger.LogRepoSearch(fmt.Sprintf("languages: %v", languages), len(allRepos), len(allRepos), languages)
+	logger.Info(fmt.Sprintf("Repository search completed: %d total results, took %v", len(allRepos), duration))
+
+	return allRepos, nil
 }
 
 // GetRepositoryIssues fetches issues for a specific repository
