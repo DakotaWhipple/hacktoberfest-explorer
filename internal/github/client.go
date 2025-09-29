@@ -33,6 +33,13 @@ type Issue struct {
 	RelevanceScore  int
 }
 
+// IssueStats contains statistics about issues in a repository
+type IssueStats struct {
+	Issues      []*Issue
+	LabelCounts map[string]int
+	TotalIssues int
+}
+
 // NewClient creates a new GitHub API client
 func NewClient(token string) *Client {
 	ctx := context.Background()
@@ -157,17 +164,16 @@ func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxR
 	return allRepos, nil
 }
 
-// GetRepositoryIssues fetches issues for a specific repository
-func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxResults int) ([]*Issue, error) {
+// GetRepositoryIssues fetches issues for a specific repository with label statistics
+func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxResults int) (*IssueStats, error) {
 	start := time.Now()
 	repoName := fmt.Sprintf("%s/%s", owner, repo)
 
 	logger.Info(fmt.Sprintf("Starting issue search for %s", repoName))
 
 	opts := &github.IssueListByRepoOptions{
-		State:  "open",
-		Labels: append(labels, "good first issue", "help wanted"),
-		Sort:   "updated",
+		State: "open",
+		Sort:  "updated",
 		ListOptions: github.ListOptions{
 			PerPage: min(maxResults, 100),
 		},
@@ -187,13 +193,22 @@ func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxRes
 		return nil, fmt.Errorf("failed to fetch issues: %w", err)
 	}
 
-	logger.Info(fmt.Sprintf("Issue search API completed for %s: %d issues returned, took %v",
-		repoName, len(issues), duration))
+	logger.Info(fmt.Sprintf("GitHub API returned %d items for %s (includes issues + PRs), took %v",
+		len(issues), repoName, duration))
 
 	result := make([]*Issue, 0, len(issues))
+	labelCounts := make(map[string]int)
+	prCount := 0
+
+	logger.Debug(fmt.Sprintf("Processing %d items from GitHub API for %s", len(issues), repoName))
+
 	for _, issue := range issues {
+		logger.Debug(fmt.Sprintf("Processing item #%d: %s, has PR links: %v",
+			*issue.Number, *issue.Title, issue.PullRequestLinks != nil))
+
 		// Skip pull requests
 		if issue.PullRequestLinks != nil {
+			prCount++
 			logger.Debug(fmt.Sprintf("Skipping pull request #%d: %s", *issue.Number, *issue.Title))
 			continue
 		}
@@ -204,15 +219,32 @@ func (c *Client) GetRepositoryIssues(owner, repo string, labels []string, maxRes
 		i.calculateDifficulty()
 		result = append(result, i)
 
-		// Log each issue found
-		logger.Debug(fmt.Sprintf("Issue processed #%d: %s, difficulty: %d",
-			*issue.Number, *issue.Title, i.DifficultyScore))
+		// Count all labels for statistics
+		labelList := make([]string, 0, len(issue.Labels))
+		for _, label := range issue.Labels {
+			labelName := strings.ToLower(*label.Name)
+			labelCounts[labelName]++
+			labelList = append(labelList, labelName)
+		}
+
+		// Log each issue found with labels
+		logger.Debug(fmt.Sprintf("Issue included #%d: %s, difficulty: %d, labels: [%s]",
+			*issue.Number, *issue.Title, i.DifficultyScore, strings.Join(labelList, ", ")))
 	}
 
-	logger.LogIssueSearch(repoName, len(issues), len(result))
-	logger.Info(fmt.Sprintf("Issue search completed for %s: %d filtered results", repoName, len(result)))
+	logger.Info(fmt.Sprintf("Processing complete for %s: %d total items, %d PRs skipped, %d actual issues, %d unique labels",
+		repoName, len(issues), prCount, len(result), len(labelCounts)))
 
-	return result, nil
+	stats := &IssueStats{
+		Issues:      result,
+		LabelCounts: labelCounts,
+		TotalIssues: len(result),
+	}
+
+	logger.Info(fmt.Sprintf("Issue search completed for %s: returning %d issues with %d unique labels",
+		repoName, len(result), len(labelCounts)))
+
+	return stats, nil
 }
 
 // GetRepositoryLanguages fetches the languages used in a repository

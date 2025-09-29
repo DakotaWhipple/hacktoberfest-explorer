@@ -88,7 +88,8 @@ type reposLoadedMsg struct {
 }
 
 type issuesLoadedMsg struct {
-	issues []*github.Issue
+	issues     []*github.Issue
+	labelStats map[string]int
 }
 
 type repoSelectedMsg struct {
@@ -112,6 +113,7 @@ type Model struct {
 	// Data
 	repos         []*github.Repository
 	issues        []*github.Issue
+	labelStats    map[string]int
 	selectedRepo  *github.Repository
 	selectedIssue *github.Issue
 
@@ -292,6 +294,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case issuesLoadedMsg:
 		m.loading = false
 		m.issues = msg.issues
+		m.labelStats = msg.labelStats
 
 		// Convert to list items
 		items := make([]list.Item, len(msg.issues))
@@ -405,7 +408,7 @@ func (m Model) loadIssues(repo *github.Repository) tea.Cmd {
 		logger.Info(fmt.Sprintf("Loading issues for %s via CLI command, max: %d",
 			repoName, m.config.MaxIssuesPerRepo))
 
-		issues, err := m.github.GetRepositoryIssues(
+		issueStats, err := m.github.GetRepositoryIssues(
 			*repo.Repository.Owner.Login,
 			*repo.Repository.Name,
 			[]string{"hacktoberfest"},
@@ -416,10 +419,10 @@ func (m Model) loadIssues(repo *github.Repository) tea.Cmd {
 			return errorMsg{err: err}
 		}
 
-		logger.Info(fmt.Sprintf("Issues loaded successfully for %s: %d issues found",
-			repoName, len(issues)))
+		logger.Info(fmt.Sprintf("Issues loaded successfully for %s: %d issues found with %d unique labels",
+			repoName, issueStats.TotalIssues, len(issueStats.LabelCounts)))
 
-		return issuesLoadedMsg{issues: issues}
+		return issuesLoadedMsg{issues: issueStats.Issues, labelStats: issueStats.LabelCounts}
 	}
 }
 
@@ -536,14 +539,72 @@ func (m Model) issueListView() string {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			RenderHeader("No Issues Found"),
 			"",
-			RenderError("No suitable issues found in this repository."),
-			RenderStatus("This repository might not have beginner-friendly issues."),
+			RenderError("No open issues found in this repository."),
+			RenderStatus("This repository might not have any open issues."),
 			"",
 			FooterStyle.Render("Q: Back • R: Refresh"),
 		)
 	}
 
-	return m.issueList.View()
+	// Create header with repository info and label statistics
+	repoName := "Unknown"
+	if m.selectedRepo != nil {
+		repoName = fmt.Sprintf("%s/%s", *m.selectedRepo.Owner.Login, *m.selectedRepo.Name)
+	}
+
+	header := RenderHeader(fmt.Sprintf("Issues in %s", repoName))
+
+	// Build label statistics display
+	var labelLines []string
+	if m.labelStats != nil && len(m.labelStats) > 0 {
+		labelLines = append(labelLines, RenderStatus(fmt.Sprintf("Found %d issues with %d unique labels:",
+			len(m.issues), len(m.labelStats))))
+
+		// Sort labels by count for better display
+		type labelCount struct {
+			name  string
+			count int
+		}
+		var sortedLabels []labelCount
+		for label, count := range m.labelStats {
+			sortedLabels = append(sortedLabels, labelCount{label, count})
+		}
+
+		// Sort by count (descending)
+		for i := 0; i < len(sortedLabels)-1; i++ {
+			for j := i + 1; j < len(sortedLabels); j++ {
+				if sortedLabels[i].count < sortedLabels[j].count {
+					sortedLabels[i], sortedLabels[j] = sortedLabels[j], sortedLabels[i]
+				}
+			}
+		}
+
+		// Show top 10 labels
+		maxLabels := len(sortedLabels)
+		if maxLabels > 10 {
+			maxLabels = 10
+		}
+
+		var labelStrs []string
+		for i := 0; i < maxLabels; i++ {
+			labelStrs = append(labelStrs, fmt.Sprintf("%s (%d)", sortedLabels[i].name, sortedLabels[i].count))
+		}
+
+		labelLines = append(labelLines, MetaStyle.Render(strings.Join(labelStrs, " • ")))
+		if len(sortedLabels) > 10 {
+			labelLines = append(labelLines, MetaStyle.Render(fmt.Sprintf("... and %d more labels", len(sortedLabels)-10)))
+		}
+	} else {
+		labelLines = append(labelLines, RenderStatus(fmt.Sprintf("Found %d issues", len(m.issues))))
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		strings.Join(labelLines, "\n"),
+		"",
+		m.issueList.View(),
+	)
 }
 
 func (m Model) issueDetailView() string {
