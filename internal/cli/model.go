@@ -88,6 +88,7 @@ type reposLoadedMsg struct {
 	totalRepoCnt int
 	currentPage  int
 	hasMore      bool
+	resetToFirst bool // true for right/next page, false for left/prev page
 }
 
 type issuesLoadedMsg struct {
@@ -238,7 +239,7 @@ func NewModel(cfg *config.Config) Model {
 
 	repoList := list.New([]list.Item{}, delegate, 0, 0)
 	repoList.Title = "Hacktoberfest Repositories"
-	repoList.SetShowStatusBar(true)
+	repoList.SetShowStatusBar(false) // Hide the built-in item count
 	repoList.SetFilteringEnabled(true)
 	repoList.SetShowHelp(true)
 
@@ -298,14 +299,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.currentScreen == repoListScreen && m.currentPage > 1 {
 				m.loading = true
 				m.currentPage--
-				return m, m.loadRepositoriesPage(m.currentPage)
+				return m, m.loadRepositoriesPageWithDirection(m.currentPage, false) // false = go to last item
 			}
 
 		case key.Matches(msg, m.keys.Right):
 			if m.currentScreen == repoListScreen && m.hasMorePages {
 				m.loading = true
 				m.currentPage++
-				return m, m.loadRepositoriesPage(m.currentPage)
+				return m, m.loadRepositoriesPageWithDirection(m.currentPage, true) // true = go to first item
 			}
 
 		case key.Matches(msg, m.keys.Enter):
@@ -322,10 +323,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalRepos = msg.totalRepoCnt
 		m.hasMorePages = msg.hasMore
 
-		// Update title with page info
-		totalPages := (msg.totalRepoCnt + m.config.MaxRepos - 1) / m.config.MaxRepos // ceil division
-		m.repoList.Title = fmt.Sprintf("Hacktoberfest Repositories (page %d/%d, total ~%d)",
-			msg.currentPage, totalPages, msg.totalRepoCnt)
+		// Update title with just total count, no page details
+		m.repoList.Title = fmt.Sprintf("Hacktoberfest Repositories (~%d total found)", msg.totalRepoCnt)
 
 		// Convert to list items
 		items := make([]list.Item, len(msg.repos))
@@ -334,6 +333,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.repoList.SetItems(items)
+
+		// Set cursor position based on navigation direction
+		if len(items) > 0 {
+			if msg.resetToFirst {
+				m.repoList.Select(0) // Go to first item
+			} else {
+				m.repoList.Select(len(items) - 1) // Go to last item
+			}
+		}
+
 		m.currentScreen = repoListScreen
 
 	case issuesLoadedMsg:
@@ -430,10 +439,14 @@ func (m Model) handleRefresh() (Model, tea.Cmd) {
 
 // Commands for async operations
 func (m Model) loadRepositories() tea.Cmd {
-	return m.loadRepositoriesPage(1)
+	return m.loadRepositoriesPageWithDirection(1, true) // Start at first item on initial load
 }
 
 func (m Model) loadRepositoriesPage(page int) tea.Cmd {
+	return m.loadRepositoriesPageWithDirection(page, true) // Default to first item
+}
+
+func (m Model) loadRepositoriesPageWithDirection(page int, resetToFirst bool) tea.Cmd {
 	return func() tea.Msg {
 		logger.Info(fmt.Sprintf("Loading repositories page %d via CLI command - languages: %v, max: %d",
 			page, m.config.PreferredLanguages, m.config.MaxRepos))
@@ -450,7 +463,13 @@ func (m Model) loadRepositoriesPage(page int) tea.Cmd {
 		logger.Info(fmt.Sprintf("Repositories page %d loaded successfully in CLI: %d repos returned (global total ~%d), hasMore: %t",
 			page, len(repos), total, hasMore))
 
-		return reposLoadedMsg{repos: repos, totalRepoCnt: total, currentPage: page, hasMore: hasMore}
+		return reposLoadedMsg{
+			repos:        repos,
+			totalRepoCnt: total,
+			currentPage:  page,
+			hasMore:      hasMore,
+			resetToFirst: resetToFirst,
+		}
 	}
 }
 
@@ -568,13 +587,18 @@ func (m Model) repoListView() string {
 
 	// Build pagination info
 	var controls []string
+
+	// Add current page info
+	totalPages := (m.totalRepos + m.config.MaxRepos - 1) / m.config.MaxRepos // ceil division
+	controls = append(controls, fmt.Sprintf("Page %d/%d", m.currentPage, totalPages))
+
 	if m.currentPage > 1 {
 		controls = append(controls, "← Previous (left)")
 	}
 	if m.hasMorePages {
 		controls = append(controls, "Next → (right)")
 	}
-	controls = append(controls, "Filter: type to search", "R: Refresh", "Q: Back")
+	controls = append(controls, "Type to filter", "R: Refresh", "Q: Back")
 
 	controlText := strings.Join(controls, " • ")
 	info := MetaStyle.Render(controlText)
