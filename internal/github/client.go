@@ -77,7 +77,7 @@ func (c *Client) SearchHacktoberfestReposWithPage(minStars int, languages []stri
 	}
 
 	// First, get a global total (without language filter) so user sees overall scale
-	globalQuery := fmt.Sprintf("topic:hacktoberfest stars:>=%d", minStars)
+	globalQuery := fmt.Sprintf("topic:hacktoberfest stars:>=%d archived:false", minStars)
 	logger.Info(fmt.Sprintf("Getting global repository count with query: %s", globalQuery))
 	globalOpts := &github.SearchOptions{Sort: "stars", Order: "desc", ListOptions: github.ListOptions{PerPage: 1}}
 	globalResult, globalResp, globalErr := c.client.Search.Repositories(c.ctx, globalQuery, globalOpts)
@@ -97,7 +97,7 @@ func (c *Client) SearchHacktoberfestReposWithPage(minStars int, languages []stri
 	}
 
 	for _, lang := range languages {
-		query := fmt.Sprintf("topic:hacktoberfest stars:>=%d sort:stars-desc", minStars)
+		query := fmt.Sprintf("topic:hacktoberfest stars:>=%d archived:false sort:stars-desc", minStars)
 
 		// Add language filter if specified
 		if lang != "" {
@@ -144,6 +144,12 @@ func (c *Client) SearchHacktoberfestReposWithPage(minStars int, languages []stri
 			if repo.StargazersCount != nil && *repo.StargazersCount >= minStars {
 				repoKey := fmt.Sprintf("%s/%s", *repo.Owner.Login, *repo.Name)
 
+				// Skip archived repositories
+				if repo.Archived != nil && *repo.Archived {
+					logger.Debug(fmt.Sprintf("Repository %s is archived, skipping", repoKey))
+					continue
+				}
+
 				// Skip if we already have this repo (from another language search)
 				if _, exists := repoMap[repoKey]; exists {
 					logger.Debug(fmt.Sprintf("Repository %s already found, skipping duplicate", repoKey))
@@ -156,8 +162,8 @@ func (c *Client) SearchHacktoberfestReposWithPage(minStars int, languages []stri
 				r.calculateRelevance(languages)
 				repoMap[repoKey] = r
 
-				logger.Debug(fmt.Sprintf("Repository processed: %s, stars: %d, relevance: %d",
-					repoKey, *repo.StargazersCount, r.RelevanceScore))
+				logger.Debug(fmt.Sprintf("Repository processed: %s, stars: %d, archived: %v, relevance: %d",
+					repoKey, *repo.StargazersCount, repo.Archived != nil && *repo.Archived, r.RelevanceScore))
 			}
 		}
 
