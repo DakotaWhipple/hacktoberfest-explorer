@@ -55,9 +55,18 @@ func NewClient(token string) *Client {
 }
 
 // SearchHacktoberfestRepos searches for Hacktoberfest repositories with minimum stars
-func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxResults int) ([]*Repository, error) {
+// SearchHacktoberfestRepos searches for Hacktoberfest repositories with minimum stars.
+// It now returns both the collected repositories (limited by maxResults) and the
+// total number of Hacktoberfest repositories matching the base criteria (without
+// language filters) so the UI can show users how many exist in total.
+func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxResults int) ([]*Repository, int, error) {
+	return c.SearchHacktoberfestReposWithPage(minStars, languages, maxResults, 1)
+}
+
+// SearchHacktoberfestReposWithPage searches for Hacktoberfest repositories with pagination support.
+func (c *Client) SearchHacktoberfestReposWithPage(minStars int, languages []string, maxResults int, page int) ([]*Repository, int, error) {
 	start := time.Now()
-	logger.Info(fmt.Sprintf("Starting repository search with languages: %v", languages))
+	logger.Info(fmt.Sprintf("Starting repository search with languages: %v, page: %d", languages, page))
 
 	var allRepos []*Repository
 	repoMap := make(map[string]*Repository) // To deduplicate repos
@@ -65,6 +74,26 @@ func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxR
 	// If no languages specified, search without language filter
 	if len(languages) == 0 {
 		languages = []string{""}
+	}
+
+	// First, get a global total (without language filter) so user sees overall scale
+	globalQuery := fmt.Sprintf("topic:hacktoberfest stars:>=%d", minStars)
+	logger.Info(fmt.Sprintf("Getting global repository count with query: %s", globalQuery))
+	globalOpts := &github.SearchOptions{Sort: "stars", Order: "desc", ListOptions: github.ListOptions{PerPage: 1}}
+	globalResult, globalResp, globalErr := c.client.Search.Repositories(c.ctx, globalQuery, globalOpts)
+	totalAvailable := 0
+	if globalResp != nil {
+		logger.LogAPIRequest("repositories/search_total", globalQuery, globalResp.StatusCode, time.Since(start))
+		logger.Debug(fmt.Sprintf("(Total) Rate limit remaining: %d, resets at: %v", globalResp.Rate.Remaining, globalResp.Rate.Reset.Time))
+	}
+	if globalErr != nil {
+		logger.ErrorWithErr("Failed to retrieve global total repository count", globalErr)
+		// Continue with language searches even if global count fails
+	} else if globalResult != nil && globalResult.Total != nil {
+		totalAvailable = *globalResult.Total
+		logger.Info(fmt.Sprintf("Global Hacktoberfest repositories total: %d", totalAvailable))
+	} else {
+		logger.Info("Global count query succeeded but no total available")
 	}
 
 	for _, lang := range languages {
@@ -84,6 +113,7 @@ func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxR
 			Sort:  "stars",
 			Order: "desc",
 			ListOptions: github.ListOptions{
+				Page:    page,
 				PerPage: min(100, maxResults), // GitHub API limit
 			},
 		}
@@ -159,9 +189,9 @@ func (c *Client) SearchHacktoberfestRepos(minStars int, languages []string, maxR
 
 	duration := time.Since(start)
 	logger.LogRepoSearch(fmt.Sprintf("languages: %v", languages), len(allRepos), len(allRepos), languages)
-	logger.Info(fmt.Sprintf("Repository search completed: %d total results, took %v", len(allRepos), duration))
+	logger.Info(fmt.Sprintf("Repository search completed: %d returned (limit %d), global total: %d, took %v", len(allRepos), maxResults, totalAvailable, duration))
 
-	return allRepos, nil
+	return allRepos, totalAvailable, nil
 }
 
 // GetRepositoryIssues fetches issues for a specific repository with label statistics

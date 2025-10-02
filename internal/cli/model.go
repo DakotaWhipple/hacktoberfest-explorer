@@ -84,7 +84,10 @@ const (
 
 // Messages for communication between components
 type reposLoadedMsg struct {
-	repos []*github.Repository
+	repos        []*github.Repository
+	totalRepoCnt int
+	currentPage  int
+	hasMore      bool
 }
 
 type issuesLoadedMsg struct {
@@ -116,6 +119,11 @@ type Model struct {
 	labelStats    map[string]int
 	selectedRepo  *github.Repository
 	selectedIssue *github.Issue
+
+	// Pagination state
+	currentPage  int
+	totalRepos   int
+	hasMorePages bool
 
 	// UI state
 	loading bool
@@ -249,6 +257,7 @@ func NewModel(cfg *config.Config) Model {
 		config:        cfg,
 		github:        github.NewClient(cfg.GitHubToken),
 		currentScreen: welcomeScreen,
+		currentPage:   1,
 		repoList:      repoList,
 		issueList:     issueList,
 		keys:          keys,
@@ -285,6 +294,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Back):
 			return m.handleBack()
 
+		case key.Matches(msg, m.keys.Left):
+			if m.currentScreen == repoListScreen && m.currentPage > 1 {
+				m.loading = true
+				m.currentPage--
+				return m, m.loadRepositoriesPage(m.currentPage)
+			}
+
+		case key.Matches(msg, m.keys.Right):
+			if m.currentScreen == repoListScreen && m.hasMorePages {
+				m.loading = true
+				m.currentPage++
+				return m, m.loadRepositoriesPage(m.currentPage)
+			}
+
 		case key.Matches(msg, m.keys.Enter):
 			return m.handleEnter()
 
@@ -295,6 +318,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reposLoadedMsg:
 		m.loading = false
 		m.repos = msg.repos
+		m.currentPage = msg.currentPage
+		m.totalRepos = msg.totalRepoCnt
+		m.hasMorePages = msg.hasMore
+
+		// Update title with page info
+		totalPages := (msg.totalRepoCnt + m.config.MaxRepos - 1) / m.config.MaxRepos // ceil division
+		m.repoList.Title = fmt.Sprintf("Hacktoberfest Repositories (page %d/%d, total ~%d)",
+			msg.currentPage, totalPages, msg.totalRepoCnt)
 
 		// Convert to list items
 		items := make([]list.Item, len(msg.repos))
@@ -387,7 +418,7 @@ func (m Model) handleRefresh() (Model, tea.Cmd) {
 	switch m.currentScreen {
 	case repoListScreen:
 		m.loading = true
-		return m, m.loadRepositories()
+		return m, m.loadRepositoriesPage(m.currentPage)
 	case issueListScreen:
 		if m.selectedRepo != nil {
 			m.loading = true
@@ -399,19 +430,27 @@ func (m Model) handleRefresh() (Model, tea.Cmd) {
 
 // Commands for async operations
 func (m Model) loadRepositories() tea.Cmd {
-	return func() tea.Msg {
-		logger.Info(fmt.Sprintf("Loading repositories via CLI command - languages: %v, max: %d",
-			m.config.PreferredLanguages, m.config.MaxRepos))
+	return m.loadRepositoriesPage(1)
+}
 
-		repos, err := m.github.SearchHacktoberfestRepos(20, m.config.PreferredLanguages, m.config.MaxRepos)
+func (m Model) loadRepositoriesPage(page int) tea.Cmd {
+	return func() tea.Msg {
+		logger.Info(fmt.Sprintf("Loading repositories page %d via CLI command - languages: %v, max: %d",
+			page, m.config.PreferredLanguages, m.config.MaxRepos))
+
+		repos, total, err := m.github.SearchHacktoberfestReposWithPage(20, m.config.PreferredLanguages, m.config.MaxRepos, page)
 		if err != nil {
 			logger.ErrorWithErr("Repository loading failed in CLI", err)
 			return errorMsg{err: err}
 		}
 
-		logger.Info(fmt.Sprintf("Repositories loaded successfully in CLI: %d repos found", len(repos)))
+		// Check if there are more pages
+		hasMore := len(repos) == m.config.MaxRepos && (page*m.config.MaxRepos) < total
 
-		return reposLoadedMsg{repos: repos}
+		logger.Info(fmt.Sprintf("Repositories page %d loaded successfully in CLI: %d repos returned (global total ~%d), hasMore: %t",
+			page, len(repos), total, hasMore))
+
+		return reposLoadedMsg{repos: repos, totalRepoCnt: total, currentPage: page, hasMore: hasMore}
 	}
 }
 
@@ -524,7 +563,23 @@ func (m Model) repoListView() string {
 		)
 	}
 
-	return m.repoList.View()
+	// m.repoList.Title already updated with counts; add pagination info and controls
+	listView := m.repoList.View()
+
+	// Build pagination info
+	var controls []string
+	if m.currentPage > 1 {
+		controls = append(controls, "← Previous (left)")
+	}
+	if m.hasMorePages {
+		controls = append(controls, "Next → (right)")
+	}
+	controls = append(controls, "Filter: type to search", "R: Refresh", "Q: Back")
+
+	controlText := strings.Join(controls, " • ")
+	info := MetaStyle.Render(controlText)
+
+	return lipgloss.JoinVertical(lipgloss.Left, listView, info)
 }
 
 func (m Model) issueListView() string {
@@ -570,7 +625,7 @@ func (m Model) issueListView() string {
 
 	// Build label statistics display
 	var labelLines []string
-	if m.labelStats != nil && len(m.labelStats) > 0 {
+	if len(m.labelStats) > 0 {
 		labelLines = append(labelLines, RenderStatus(fmt.Sprintf("Found %d issues with %d unique labels:",
 			len(m.issues), len(m.labelStats))))
 
