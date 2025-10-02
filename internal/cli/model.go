@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -24,16 +26,17 @@ type keyMap struct {
 	Back    key.Binding
 	Quit    key.Binding
 	Refresh key.Binding
+	Issues  key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Issues, k.Back, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
-		{k.Enter, k.Back, k.Refresh, k.Quit},
+		{k.Enter, k.Issues, k.Back, k.Refresh, k.Quit},
 	}
 }
 
@@ -56,7 +59,7 @@ var keys = keyMap{
 	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter"),
-		key.WithHelp("enter", "select"),
+		key.WithHelp("enter", "open in browser"),
 	),
 	Back: key.NewBinding(
 		key.WithKeys("esc", "q"),
@@ -69,6 +72,10 @@ var keys = keyMap{
 	Refresh: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "refresh"),
+	),
+	Issues: key.NewBinding(
+		key.WithKeys("i"),
+		key.WithHelp("i", "view issues"),
 	),
 }
 
@@ -312,6 +319,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			return m.handleEnter()
 
+		case key.Matches(msg, m.keys.Issues):
+			return m.handleIssues()
+
 		case key.Matches(msg, m.keys.Refresh):
 			return m.handleRefresh()
 		}
@@ -401,11 +411,12 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Get selected repository
+		// Get selected repository and open in browser
 		if selectedItem, ok := m.repoList.SelectedItem().(repoItem); ok {
-			m.selectedRepo = selectedItem.repo
-			m.loading = true
-			return m, m.loadIssues(selectedItem.repo)
+			repo := selectedItem.repo
+			if repo.Repository.HTMLURL != nil {
+				return m, m.openInBrowser(*repo.Repository.HTMLURL)
+			}
 		}
 
 	case issueListScreen:
@@ -413,10 +424,30 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Get selected issue
+		// Get selected issue and open in browser
 		if selectedItem, ok := m.issueList.SelectedItem().(issueItem); ok {
-			m.selectedIssue = selectedItem.issue
-			m.currentScreen = issueDetailScreen
+			issue := selectedItem.issue
+			if issue.Issue.HTMLURL != nil {
+				return m, m.openInBrowser(*issue.Issue.HTMLURL)
+			}
+		}
+	}
+
+	return m, nil
+}
+
+func (m Model) handleIssues() (Model, tea.Cmd) {
+	switch m.currentScreen {
+	case repoListScreen:
+		if len(m.repoList.Items()) == 0 {
+			return m, nil
+		}
+
+		// Get selected repository and load its issues
+		if selectedItem, ok := m.repoList.SelectedItem().(repoItem); ok {
+			m.selectedRepo = selectedItem.repo
+			m.loading = true
+			return m, m.loadIssues(selectedItem.repo)
 		}
 	}
 
@@ -495,6 +526,33 @@ func (m Model) loadIssues(repo *github.Repository) tea.Cmd {
 			repoName, issueStats.TotalIssues, len(issueStats.LabelCounts)))
 
 		return issuesLoadedMsg{issues: issueStats.Issues, labelStats: issueStats.LabelCounts}
+	}
+}
+
+func (m Model) openInBrowser(url string) tea.Cmd {
+	return func() tea.Msg {
+		logger.Info(fmt.Sprintf("Opening URL in browser: %s", url))
+
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin": // macOS
+			cmd = exec.Command("open", url)
+		case "linux":
+			cmd = exec.Command("xdg-open", url)
+		case "windows":
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			logger.Info(fmt.Sprintf("Unsupported operating system for browser opening: %s", runtime.GOOS))
+			return nil
+		}
+
+		if err := cmd.Start(); err != nil {
+			logger.ErrorWithErr("Failed to open browser", err)
+		} else {
+			logger.Info("Successfully opened URL in browser")
+		}
+
+		return nil
 	}
 }
 
@@ -598,7 +656,7 @@ func (m Model) repoListView() string {
 	if m.hasMorePages {
 		controls = append(controls, "Next → (right)")
 	}
-	controls = append(controls, "Type to filter", "R: Refresh", "Q: Back")
+	controls = append(controls, "Enter: Open in browser", "I: View issues", "Type to filter", "R: Refresh", "Q: Back")
 
 	controlText := strings.Join(controls, " • ")
 	info := MetaStyle.Render(controlText)
